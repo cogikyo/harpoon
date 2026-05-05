@@ -7,7 +7,8 @@ local M = {}
 M.data_path = data_path
 
 function M.project_key()
-    return vim.loop.cwd()
+    local cwd = vim.loop.cwd()
+    return vim.fs.root(cwd, { ".git" }) or cwd
 end
 
 function M.branch_key()
@@ -32,7 +33,7 @@ function M.branch_key()
     end
 
     if branch then
-        return vim.loop.cwd() .. "-" .. branch
+        return M.project_key() .. "-" .. branch
     else
         return M.project_key()
     end

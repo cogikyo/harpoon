@@ -2,13 +2,10 @@ local harpoon = require("harpoon")
 local utils = require("harpoon.utils")
 local log = require("harpoon.dev").log
 
--- I think that I may have to organize this better.  I am not the biggest fan
--- of procedural all the things
 local M = {}
 local callbacks = {}
+local active_slots = 7
 
--- I am trying to avoid over engineering the whole thing.  We will likely only
--- need one event emitted
 local function emit_changed()
     log.trace("_emit_changed()")
 
@@ -22,44 +19,30 @@ local function emit_changed()
         vim.cmd("redrawt")
     end
 
-    if not callbacks["changed"] then
+    if not callbacks.changed then
         log.trace("_emit_changed(): no callbacks for 'changed', returning")
         return
     end
 
-    for idx, cb in pairs(callbacks["changed"]) do
-        log.trace(
-            string.format(
-                "_emit_changed(): Running callback #%d for 'changed'",
-                idx
-            )
-        )
+    for idx, cb in pairs(callbacks.changed) do
+        log.trace(string.format("_emit_changed(): Running callback #%d for 'changed'", idx))
         cb()
     end
 end
 
-local function filter_empty_string(list)
-    log.trace("_filter_empty_string()")
-    local next = {}
-    for idx = 1, #list do
-        if list[idx] ~= "" then
-            table.insert(next, list[idx].filename)
+local function active_filenames(marks)
+    if marks then
+        local list = {}
+        for _, mark in ipairs(marks) do
+            if type(mark) == "table" then
+                table.insert(list, mark.filename)
+            elseif type(mark) == "string" then
+                table.insert(list, mark)
+            end
         end
+        return list
     end
-
-    return next
-end
-
-local function get_first_empty_slot()
-    log.trace("_get_first_empty_slot()")
-    for idx = 1, M.get_length() do
-        local filename = M.get_marked_file_name(idx)
-        if filename == "" then
-            return idx
-        end
-    end
-
-    return M.get_length() + 1
+    return harpoon.get_active_list()
 end
 
 local function get_buf_name(id)
@@ -74,107 +57,76 @@ local function get_buf_name(id)
     if M.valid_index(idx) then
         return M.get_marked_file_name(idx)
     end
-    --
-    -- not sure what to do here...
-    --
+
     return ""
 end
 
-local function create_mark(filename)
-    local cursor_pos = vim.api.nvim_win_get_cursor(0)
-    log.trace(
-        string.format(
-            "_create_mark(): Creating mark at row: %d, col: %d for %s",
-            cursor_pos[1],
-            cursor_pos[2],
-            filename
-        )
-    )
-    return {
-        filename = filename,
-        row = cursor_pos[1],
-        col = cursor_pos[2],
-    }
+local function remove_filename(list, filename)
+    for idx = #list, 1, -1 do
+        if list[idx] == filename then
+            table.remove(list, idx)
+        end
+    end
+end
+
+local function is_pinned(filename)
+    for _, pin in ipairs(harpoon.get_project_config().pins) do
+        if pin == filename then
+            return true
+        end
+    end
+    return false
 end
 
 local function mark_exists(buf_name)
     log.trace("_mark_exists()")
-    for idx = 1, M.get_length() do
-        if M.get_marked_file_name(idx) == buf_name then
-            log.debug("_mark_exists(): Mark exists", buf_name)
-            return true
-        end
-    end
-
-    log.debug("_mark_exists(): Mark doesn't exist", buf_name)
-    return false
+    return M.valid_index(M.get_index_of(buf_name))
 end
 
-local function validate_buf_name(buf_name)
+local function valid_buf_name(buf_name)
     log.trace("_validate_buf_name():", buf_name)
     if buf_name == "" or buf_name == nil then
-        log.error(
-            "_validate_buf_name(): Not a valid name for a mark,",
-            buf_name
-        )
-        error("Couldn't find a valid file name to mark, sorry.")
-        return
+        log.warn("_validate_buf_name(): Not a valid name for a mark,", buf_name)
+        return false
     end
+    return true
 end
 
-local function filter_filetype()
-    local current_filetype = vim.bo.filetype
-    local excluded_filetypes = harpoon.get_global_settings().excluded_filetypes
-
-    if current_filetype == "harpoon" then
-        log.error("filter_filetype(): You can't add harpoon to the harpoon")
-        error("You can't add harpoon to the harpoon")
-        return
+local function valid_filetype()
+    if vim.bo.buftype ~= "" then
+        log.warn("filter_filetype(): Only normal file buffers can be added")
+        return false
     end
 
-    if vim.tbl_contains(excluded_filetypes, current_filetype) then
-        log.error(
-            'filter_filetype(): This filetype cannot be added or is included in the "excluded_filetypes" option'
-        )
-        error(
-            'This filetype cannot be added or is included in the "excluded_filetypes" option'
-        )
-        return
+    if vim.bo.filetype == "harpoon" then
+        log.warn("filter_filetype(): You can't add harpoon to the harpoon")
+        return false
     end
+    return true
 end
 
 function M.get_index_of(item, marks)
     log.trace("get_index_of():", item)
     if item == nil then
-        log.error(
-            "get_index_of(): Function has been supplied with a nil value."
-        )
-        error(
-            "You have provided a nil value to Harpoon, please provide a string rep of the file or the file idx."
-        )
-        return
+        log.error("get_index_of(): Function has been supplied with a nil value.")
+        error("You have provided a nil value to Harpoon, please provide a string rep of the file or the file idx.")
     end
 
     if type(item) == "string" then
         local relative_item = utils.normalize_path(item)
-        if marks == nil then
-            marks = harpoon.get_mark_config().marks
-        end
-        for idx = 1, M.get_length(marks) do
-            if marks[idx] and marks[idx].filename == relative_item then
+        for idx, filename in ipairs(active_filenames(marks)) do
+            if filename == relative_item then
                 return idx
             end
         end
-
         return nil
     end
 
-    -- TODO move this to a "harpoon_" prefix or global config?
     if vim.g.manage_a_mark_zero_index then
         item = item + 1
     end
 
-    if item <= M.get_length() and item >= 1 then
+    if item <= active_slots and item >= 1 then
         return item
     end
 
@@ -191,9 +143,7 @@ function M.status(bufnr)
         buf_name = vim.api.nvim_buf_get_name(0)
     end
 
-    local norm_name = utils.normalize_path(buf_name)
-    local idx = M.get_index_of(norm_name)
-
+    local idx = M.get_index_of(utils.normalize_path(buf_name))
     if M.valid_index(idx) then
         return "M" .. idx
     end
@@ -211,74 +161,37 @@ function M.valid_index(idx, marks)
 end
 
 function M.add_file(file_name_or_buf_id)
-    filter_filetype()
+    if not valid_filetype() then
+        return
+    end
     local buf_name = get_buf_name(file_name_or_buf_id)
     log.trace("add_file():", buf_name)
 
-    if M.valid_index(M.get_index_of(buf_name)) then
-        -- we don't alter file layout.
+    if is_pinned(buf_name) then
         return
     end
 
-    validate_buf_name(buf_name)
+    if not valid_buf_name(buf_name) then
+        return
+    end
 
-    local found_idx = get_first_empty_slot()
-    harpoon.get_mark_config().marks[found_idx] = create_mark(buf_name)
-    M.remove_empty_tail(false)
+    local pins = harpoon.get_project_config().pins
+    if #pins >= active_slots then
+        table.remove(pins, active_slots)
+    end
+    table.insert(pins, buf_name)
     emit_changed()
 end
 
--- _emit_on_changed == false should only be used internally
 function M.remove_empty_tail(_emit_on_changed)
     log.trace("remove_empty_tail()")
-    _emit_on_changed = _emit_on_changed == nil or _emit_on_changed
-    local config = harpoon.get_mark_config()
-    local found = false
-
-    for i = M.get_length(), 1, -1 do
-        local filename = M.get_marked_file_name(i)
-        if filename ~= "" then
-            return
-        end
-
-        if filename == "" then
-            table.remove(config.marks, i)
-            found = found or _emit_on_changed
-        end
-    end
-
-    if found then
+    if _emit_on_changed == nil or _emit_on_changed then
         emit_changed()
     end
 end
 
 function M.store_offset()
     log.trace("store_offset()")
-    local ok, res = pcall(function()
-        local marks = harpoon.get_mark_config().marks
-        local buf_name = get_buf_name()
-        local idx = M.get_index_of(buf_name, marks)
-        if not M.valid_index(idx, marks) then
-            return
-        end
-
-        local cursor_pos = vim.api.nvim_win_get_cursor(0)
-        log.debug(
-            string.format(
-                "store_offset(): Stored row: %d, col: %d",
-                cursor_pos[1],
-                cursor_pos[2]
-            )
-        )
-        marks[idx].row = cursor_pos[1]
-        marks[idx].col = cursor_pos[2]
-    end)
-
-    if not ok then
-        log.warn("store_offset(): Could not store offset:", res)
-    end
-
-    emit_changed()
 end
 
 function M.rm_file(file_name_or_buf_id)
@@ -291,62 +204,62 @@ function M.rm_file(file_name_or_buf_id)
         return
     end
 
-    harpoon.get_mark_config().marks[idx] = create_mark("")
-    M.remove_empty_tail(false)
+    local project = harpoon.get_project_config()
+    remove_filename(project.pins, buf_name)
+    project.visits[buf_name] = nil
     emit_changed()
 end
 
 function M.clear_all()
-    harpoon.get_mark_config().marks = {}
+    local project = harpoon.get_project_config()
+    project.pins = {}
+    project.visits = {}
     log.trace("clear_all(): Clearing all marks.")
     emit_changed()
 end
 
---- ENTERPRISE PROGRAMMING
 function M.get_marked_file(idxOrName)
     log.trace("get_marked_file():", idxOrName)
     if type(idxOrName) == "string" then
         idxOrName = M.get_index_of(idxOrName)
     end
-    return harpoon.get_mark_config().marks[idxOrName]
+    local filename = active_filenames()[idxOrName]
+    if filename then
+        return { filename = filename }
+    end
+    return nil
 end
 
 function M.get_marked_file_name(idx, marks)
-    local mark
-    if marks ~= nil then
-        mark = marks[idx]
-    else
-        mark = harpoon.get_mark_config().marks[idx]
-    end
-    log.trace("get_marked_file_name():", mark and mark.filename)
-    return mark and mark.filename
+    local filename = active_filenames(marks)[idx]
+    log.trace("get_marked_file_name():", filename)
+    return filename
 end
 
 function M.get_length(marks)
-    if marks == nil then
-        marks = harpoon.get_mark_config().marks
-    end
     log.trace("get_length()")
-    return table.maxn(marks)
+    if marks ~= nil then
+        return #active_filenames(marks)
+    end
+    return active_slots
 end
 
 function M.set_current_at(idx)
-    filter_filetype()
+    if not valid_filetype() then
+        return
+    end
     local buf_name = get_buf_name()
     log.trace("set_current_at(): Setting id", idx, buf_name)
-    local config = harpoon.get_mark_config()
-    local current_idx = M.get_index_of(buf_name)
-
-    -- Remove it if it already exists
-    if M.valid_index(current_idx) then
-        config.marks[current_idx] = create_mark("")
+    if not valid_buf_name(buf_name) then
+        return
     end
 
-    config.marks[idx] = create_mark(buf_name)
-
-    for i = 1, M.get_length() do
-        if not config.marks[i] then
-            config.marks[i] = create_mark("")
+    local project = harpoon.get_project_config()
+    remove_filename(project.pins, buf_name)
+    if idx >= 1 and idx <= active_slots then
+        project.pins[idx] = buf_name
+        while #project.pins > active_slots do
+            table.remove(project.pins)
         end
     end
 
@@ -355,16 +268,11 @@ end
 
 function M.to_quickfix_list()
     log.trace("to_quickfix_list(): Sending marks to quickfix list.")
-    local config = harpoon.get_mark_config()
-    local file_list = filter_empty_string(config.marks)
     local qf_list = {}
-    for idx = 1, #file_list do
-        local mark = M.get_marked_file(idx)
+    for idx, filename in ipairs(active_filenames()) do
         qf_list[idx] = {
-            text = string.format("%d: %s", idx, file_list[idx]),
-            filename = mark.filename,
-            row = mark.row,
-            col = mark.col,
+            text = string.format("%d: %s", idx, filename),
+            filename = filename,
         }
     end
     log.debug("to_quickfix_list(): qf_list:", qf_list)
@@ -373,21 +281,27 @@ end
 
 function M.set_mark_list(new_list)
     log.trace("set_mark_list(): New list:", new_list)
+    local pins = {}
+    local seen = {}
 
-    local config = harpoon.get_mark_config()
-
-    for k, v in pairs(new_list) do
-        if type(v) == "string" then
-            local mark = M.get_marked_file(v)
-            if not mark then
-                mark = create_mark(v)
+    for _, item in ipairs(new_list) do
+        local filename = item
+        if type(item) == "table" then
+            filename = item.filename
+        end
+        if type(filename) == "string" then
+            filename = utils.normalize_path(filename)
+            if filename ~= "" and filename ~= "(empty)" and not seen[filename] then
+                seen[filename] = true
+                table.insert(pins, filename)
+                if #pins >= active_slots then
+                    break
+                end
             end
-
-            new_list[k] = mark
         end
     end
 
-    config.marks = new_list
+    harpoon.get_project_config().pins = pins
     emit_changed()
 end
 
@@ -395,7 +309,9 @@ function M.toggle_file(file_name_or_buf_id)
     local buf_name = get_buf_name(file_name_or_buf_id)
     log.trace("toggle_file():", buf_name)
 
-    validate_buf_name(buf_name)
+    if not valid_buf_name(buf_name) then
+        return
+    end
 
     if mark_exists(buf_name) then
         M.rm_file(buf_name)
@@ -415,11 +331,7 @@ end
 
 function M.on(event, cb)
     log.trace("on():", event)
-    if not callbacks[event] then
-        log.debug("on(): no callbacks yet for", event)
-        callbacks[event] = {}
-    end
-
+    callbacks[event] = callbacks[event] or {}
     table.insert(callbacks[event], cb)
     log.debug("on(): All callbacks:", callbacks)
 end

@@ -8,6 +8,7 @@ local M = {}
 
 Harpoon_win_id = nil
 Harpoon_bufh = nil
+Harpoon_menu_original = nil
 
 -- We save before we close because we use the state of the buffer as the list
 -- of items.
@@ -23,6 +24,7 @@ local function close_menu(force_save)
 
     Harpoon_win_id = nil
     Harpoon_bufh = nil
+    Harpoon_menu_original = nil
 end
 
 local function create_window()
@@ -99,11 +101,12 @@ function M.toggle_quick_menu()
 
     for idx = 1, Marked.get_length() do
         local file = Marked.get_marked_file_name(idx)
-        if file == "" then
+        if file == nil or file == "" then
             file = "(empty)"
         end
         contents[idx] = string.format("%s", file)
     end
+    Harpoon_menu_original = vim.deepcopy(contents)
 
     vim.api.nvim_win_set_option(Harpoon_win_id, "number", true)
     vim.api.nvim_buf_set_name(Harpoon_bufh, "harpoon-menu")
@@ -165,7 +168,12 @@ end
 
 function M.on_menu_save()
     log.trace("on_menu_save()")
-    Marked.set_mark_list(get_menu_items())
+    local lines = get_menu_items()
+    if vim.deep_equal(lines, Harpoon_menu_original) then
+        return
+    end
+    Marked.set_mark_list(lines)
+    Harpoon_menu_original = vim.deepcopy(lines)
 end
 
 local function get_or_create_buffer(filename)
@@ -186,24 +194,16 @@ function M.nav_file(id)
     end
 
     local mark = Marked.get_marked_file(idx)
+    if not mark then
+        return
+    end
     local filename = vim.fs.normalize(mark.filename)
     local buf_id = get_or_create_buffer(filename)
-    local set_row = not vim.api.nvim_buf_is_loaded(buf_id)
 
     local old_bufnr = vim.api.nvim_get_current_buf()
 
     vim.api.nvim_set_current_buf(buf_id)
     vim.api.nvim_buf_set_option(buf_id, "buflisted", true)
-    if set_row and mark.row and mark.col then
-        vim.api.nvim_win_set_cursor(0, { mark.row, mark.col })
-        log.debug(
-            string.format(
-                "nav_file(): Setting cursor to row: %d, col: %d",
-                mark.row,
-                mark.col
-            )
-        )
-    end
 
     local old_bufinfo = vim.fn.getbufinfo(old_bufnr)
     if type(old_bufinfo) == "table" and #old_bufinfo >= 1 then

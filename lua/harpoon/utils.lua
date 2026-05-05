@@ -75,4 +75,25 @@ function M.is_white_space(str)
     return str:gsub("%s", "") == ""
 end
 
+function M.set_border_background(border_hl, window_hl)
+    local ok_border, border = pcall(vim.api.nvim_get_hl, 0, {
+        name = border_hl,
+        link = false,
+    })
+    local ok_window, window = pcall(vim.api.nvim_get_hl, 0, {
+        name = window_hl,
+        link = false,
+    })
+
+    if not ok_border or not ok_window or window.bg == nil then
+        return border_hl
+    end
+
+    local hl = vim.tbl_extend("force", border, { bg = window.bg })
+    local merged_hl = border_hl .. "WithBackground"
+    vim.api.nvim_set_hl(0, merged_hl, hl)
+
+    return merged_hl
+end
+
 return M

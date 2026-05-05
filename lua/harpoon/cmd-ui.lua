@@ -33,7 +33,7 @@ local function create_window()
     local bufnr = vim.api.nvim_create_buf(false, false)
 
     local Harpoon_cmd_win_id, win = popup.create(bufnr, {
-        title = "Harpoon Commands",
+        title = "🤈 Harpoon Commands",
         highlight = "HarpoonWindow",
         line = math.floor(((vim.o.lines - height) / 2) - 1),
         col = math.floor((vim.o.columns - width) / 2),
@@ -45,7 +45,7 @@ local function create_window()
     vim.api.nvim_win_set_option(
         win.border.win_id,
         "winhl",
-        "Normal:HarpoonBorder"
+        "Normal:" .. utils.set_border_background("HarpoonBorder", "HarpoonWindow")
     )
 
     return {

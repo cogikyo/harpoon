@@ -6,7 +6,7 @@ local config_path = vim.fn.stdpath("config")
 local pins_path = string.format("%s/harpoon.json", config_path)
 local state_path = string.format("%s/harpoon.json", vim.fn.stdpath("state"))
 local old_data_config = string.format("%s/harpoon.json", vim.fn.stdpath("data"))
-local active_slots = 7
+local active_slots = 20
 local visit_interval = 120
 
 local M = {}
@@ -21,7 +21,7 @@ local the_primeagen_harpoon = vim.api.nvim_create_augroup(
 
 vim.api.nvim_create_autocmd("VimLeavePre", {
     callback = function()
-        M.save()
+        M.save_state()
     end,
     group = the_primeagen_harpoon,
 })
@@ -278,24 +278,27 @@ local function clean_visits(visits, project_key)
 end
 
 local function migrate_project(project, key)
-    local pins = {}
-    local visits = {}
+    local migrated = {}
 
     if type(project) == "table" then
         if type(project.pins) == "table" then
-            pins = unique_pins(project.pins, key)
+            migrated.pins = unique_pins(project.pins, key)
         elseif type(project.mark) == "table" and type(project.mark.marks) == "table" then
-            pins = unique_pins(project.mark.marks, key)
+            migrated.pins = unique_pins(project.mark.marks, key)
         end
 
-        visits = clean_visits(project.visits, key)
+        if type(project.visits) == "table" then
+            migrated.visits = clean_visits(project.visits, key)
+        end
     end
 
-    if #pins == 0 and vim.tbl_isempty(visits) then
+    if (not migrated.pins or #migrated.pins == 0)
+        and (not migrated.visits or vim.tbl_isempty(migrated.visits))
+    then
         return nil
     end
 
-    return { pins = pins, visits = visits }
+    return migrated
 end
 
 local function migrate_config(config)
@@ -332,6 +335,9 @@ local function ensure_correct_config(config)
     log.trace("_ensure_correct_config()")
     config.version = 1
     config.projects = config.projects or {}
+    for key in pairs(config.projects) do
+        ensure_project(config, key)
+    end
     ensure_project(config, mark_config_key(config.global_settings))
     return config
 end

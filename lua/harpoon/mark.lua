@@ -4,7 +4,7 @@ local log = require("harpoon.dev").log
 
 local M = {}
 local callbacks = {}
-local active_slots = 7
+local active_slots = 20
 
 local function emit_changed()
     log.trace("_emit_changed()")

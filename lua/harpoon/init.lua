@@ -7,11 +7,8 @@ local pins_path = string.format("%s/harpoon.json", config_path)
 local state_path = string.format("%s/harpoon.json", vim.fn.stdpath("state"))
 local old_data_config = string.format("%s/harpoon.json", vim.fn.stdpath("data"))
 local active_slots = 20
-local visit_interval = 120
 
 local M = {}
-local save_timer = nil
-local seen_visits = {}
 local term_configs = {}
 
 local the_primeagen_harpoon = vim.api.nvim_create_augroup(
@@ -22,13 +19,6 @@ local the_primeagen_harpoon = vim.api.nvim_create_augroup(
 vim.api.nvim_create_autocmd("VimLeavePre", {
     callback = function()
         M.save_state()
-    end,
-    group = the_primeagen_harpoon,
-})
-
-vim.api.nvim_create_autocmd("BufEnter", {
-    callback = function(args)
-        M.track_visit(args.buf)
     end,
     group = the_primeagen_harpoon,
 })
@@ -184,9 +174,7 @@ local function encode_clean_config(config, mode)
         local fields = {}
 
         if mode == "pins" or mode == "all" then
-            if #project.pins > 0 then
-                table.insert(fields, "      \"pins\": " .. encode_array(project.pins, 6))
-            end
+            table.insert(fields, "      \"pins\": " .. encode_array(project.pins, 6))
         end
 
         if mode == "state" or mode == "all" then
@@ -292,7 +280,7 @@ local function migrate_project(project, key)
         end
     end
 
-    if (not migrated.pins or #migrated.pins == 0)
+    if migrated.pins == nil
         and (not migrated.visits or vim.tbl_isempty(migrated.visits))
     then
         return nil
@@ -360,6 +348,7 @@ end
 
 function M.save()
     log.trace("save(): Saving pins to", pins_path)
+    M.refresh_projects_b4update()
     local config = migrate_config(HarpoonConfig)
     vim.fn.mkdir(vim.fn.fnamemodify(pins_path, ":h"), "p")
     vim.fn.writefile(vim.split(encode_clean_config(config, "pins"), "\n", { plain = true }), pins_path)
@@ -453,94 +442,25 @@ function M.get_project_config(key)
 end
 
 function M.get_active_list(key)
-    local project = M.get_project_config(key)
-    local active = vim.deepcopy(project.pins)
-    local pinned = {}
-    for _, filename in ipairs(active) do
-        pinned[filename] = true
-    end
-
-    local candidates = {}
-    for filename, visit in pairs(project.visits) do
-        if not pinned[filename] and visit.count >= 5 then
-            table.insert(candidates, {
-                filename = filename,
-                count = visit.count,
-                last = visit.last,
-            })
-        end
-    end
-    table.sort(candidates, function(a, b)
-        if a.count ~= b.count then
-            return a.count > b.count
-        end
-        if a.last ~= b.last then
-            return a.last > b.last
-        end
-        return a.filename < b.filename
-    end)
-
-    for _, item in ipairs(candidates) do
-        if #active >= active_slots then
-            break
-        end
-        table.insert(active, item.filename)
-    end
-
-    return active
+    return vim.deepcopy(M.get_project_config(key).pins)
 end
 
-function M.save_deferred()
-    if save_timer then
-        save_timer:stop()
-    else
-        save_timer = vim.loop.new_timer()
-    end
-
-    save_timer:start(300, 0, vim.schedule_wrap(function()
-        M.save_state()
-    end))
-end
-
-local function is_normal_file(bufnr)
-    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-        return false
-    end
-    if vim.api.nvim_buf_get_option(bufnr, "buftype") ~= "" then
-        return false
-    end
-    return vim.api.nvim_buf_get_name(bufnr) ~= ""
-end
-
-function M.track_visit(bufnr)
-    if not is_normal_file(bufnr) then
-        return
-    end
-
-    local key = mark_config_key()
-    local filename = clean_filename(vim.api.nvim_buf_get_name(bufnr))
-    if not filename then
-        return
-    end
-
-    local now = os.time()
-    seen_visits[key] = seen_visits[key] or {}
-    if seen_visits[key][filename] and now - seen_visits[key][filename] < visit_interval then
-        return
-    end
-    seen_visits[key][filename] = now
-
-    local visits = M.get_project_config(key).visits
-    visits[filename] = visits[filename] or { count = 0, last = 0 }
-    visits[filename].count = visits[filename].count + 1
-    visits[filename].last = now
-    M.save_deferred()
-end
-
--- refresh all projects from disk, except our current one
 function M.refresh_projects_b4update()
-    log.trace("refresh_projects_b4update(): no-op for clean forked schema")
+    log.trace("refresh_projects_b4update(): refreshing inactive projects")
     ensure_correct_config(HarpoonConfig)
+
+    local ok, disk_config = pcall(read_config, pins_path)
+    if not ok then
+        return
+    end
+
+    local current_key = mark_config_key()
+    disk_config = expand_dir(migrate_config(disk_config))
+    for key, project in pairs(disk_config.projects) do
+        if key ~= current_key then
+            HarpoonConfig.projects[key] = project
+        end
+    end
 end
 
 function M.get_term_config()

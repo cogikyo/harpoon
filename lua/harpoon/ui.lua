@@ -63,13 +63,26 @@ local function get_menu_items()
     local lines = vim.api.nvim_buf_get_lines(Harpoon_bufh, 0, -1, true)
     local indices = {}
 
-    for _, line in pairs(lines) do
+    for _, line in ipairs(lines) do
         if not utils.is_white_space(line) then
             table.insert(indices, line)
         end
     end
 
     return indices
+end
+
+local function get_menu_contents()
+    local contents = {}
+    -- Menu capacity is independent of get_length() (populated pin count for nav wrap).
+    for idx = 1, Marked.get_capacity() do
+        local file = Marked.get_marked_file_name(idx)
+        if file == nil or file == "" then
+            file = "(empty)"
+        end
+        contents[idx] = file
+    end
+    return contents
 end
 
 function M.toggle_quick_menu()
@@ -93,25 +106,23 @@ function M.toggle_quick_menu()
     )
 
     local win_info = create_window()
-    local contents = {}
+    local contents = get_menu_contents()
     local global_config = harpoon.get_global_settings()
 
     Harpoon_win_id = win_info.win_id
     Harpoon_bufh = win_info.bufnr
 
-    for idx = 1, Marked.get_length() do
-        local file = Marked.get_marked_file_name(idx)
-        if file == nil or file == "" then
-            file = "(empty)"
-        end
-        contents[idx] = string.format("%s", file)
-    end
     Harpoon_menu_original = vim.deepcopy(contents)
 
     vim.api.nvim_win_set_option(Harpoon_win_id, "number", true)
     vim.api.nvim_buf_set_name(Harpoon_bufh, "harpoon-menu")
     vim.api.nvim_buf_set_lines(Harpoon_bufh, 0, #contents, false, contents)
     vim.api.nvim_buf_set_option(Harpoon_bufh, "filetype", "harpoon")
+    vim.api.nvim_win_set_option(
+        Harpoon_win_id,
+        "statuscolumn",
+        "%=%{v:lnum<=7?['A','S','E','T','G','F','D'][v:lnum-1]:'warm'} "
+    )
     vim.api.nvim_buf_set_option(Harpoon_bufh, "buftype", "acwrite")
     vim.api.nvim_buf_set_option(Harpoon_bufh, "bufhidden", "delete")
     vim.api.nvim_buf_set_keymap(
@@ -137,7 +148,7 @@ function M.toggle_quick_menu()
     )
     vim.cmd(
         string.format(
-            "autocmd BufWriteCmd <buffer=%s> lua require('harpoon.ui').on_menu_save()",
+            "autocmd BufWriteCmd <buffer=%s> lua require('harpoon.ui').on_menu_save(true)",
             Harpoon_bufh
         )
     )
@@ -166,14 +177,24 @@ function M.select_menu_item()
     M.nav_file(idx)
 end
 
-function M.on_menu_save()
+function M.on_menu_save(force_persist)
     log.trace("on_menu_save()")
     local lines = get_menu_items()
     if vim.deep_equal(lines, Harpoon_menu_original) then
+        if force_persist then
+            harpoon.save()
+        end
         return
     end
+
     Marked.set_mark_list(lines)
-    Harpoon_menu_original = vim.deepcopy(lines)
+    local contents = get_menu_contents()
+    Harpoon_menu_original = vim.deepcopy(contents)
+    vim.api.nvim_buf_set_lines(Harpoon_bufh, 0, -1, false, contents)
+
+    if force_persist and not harpoon.get_global_settings().save_on_change then
+        harpoon.save()
+    end
 end
 
 local function get_or_create_buffer(filename)

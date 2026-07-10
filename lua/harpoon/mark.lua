@@ -238,9 +238,10 @@ end
 
 function M.get_length(marks)
     log.trace("get_length()")
-    if marks ~= nil then
-        return #active_filenames(marks)
-    end
+    return #active_filenames(marks)
+end
+
+function M.get_capacity()
     return active_slots
 end
 
@@ -253,14 +254,18 @@ function M.set_current_at(idx)
     if not valid_buf_name(buf_name) then
         return
     end
+    if type(idx) ~= "number" or idx < 1 or idx > active_slots or idx % 1 ~= 0 then
+        return
+    end
 
-    local project = harpoon.get_project_config()
-    remove_filename(project.pins, buf_name)
-    if idx >= 1 and idx <= active_slots then
-        project.pins[idx] = buf_name
-        while #project.pins > active_slots do
-            table.remove(project.pins)
-        end
+    local pins = harpoon.get_project_config().pins
+    remove_filename(pins, buf_name)
+
+    -- Dense curated list: replace in-range, append past the tail, never open gaps.
+    if idx <= #pins then
+        pins[idx] = buf_name
+    elseif #pins < active_slots then
+        table.insert(pins, buf_name)
     end
 
     emit_changed()
@@ -301,7 +306,9 @@ function M.set_mark_list(new_list)
         end
     end
 
-    harpoon.get_project_config().pins = pins
+    local project = harpoon.get_project_config()
+    project.pins = pins
+    project.visits = {}
     emit_changed()
 end
 

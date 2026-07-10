@@ -121,7 +121,7 @@ function M.toggle_quick_menu()
     vim.api.nvim_win_set_option(
         Harpoon_win_id,
         "statuscolumn",
-        "%=%{v:lnum<=7?['A','S','E','T','G','F','D'][v:lnum-1]:'warm'} "
+        "%=%{v:lnum<=7?['T','E','S','A','G','F','D'][v:lnum-1]:v:lnum} "
     )
     vim.api.nvim_buf_set_option(Harpoon_bufh, "buftype", "acwrite")
     vim.api.nvim_buf_set_option(Harpoon_bufh, "bufhidden", "delete")

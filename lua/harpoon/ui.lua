@@ -219,6 +219,9 @@ function M.nav_file(id)
         return
     end
     local filename = vim.fs.normalize(mark.filename)
+    if not vim.startswith(filename, "/") then
+        filename = vim.fs.joinpath(utils.project_key(), filename)
+    end
     local buf_id = get_or_create_buffer(filename)
 
     local old_bufnr = vim.api.nvim_get_current_buf()
